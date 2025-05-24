@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"maps"
-	"math"
 	"strings"
 	"text/template"
 
@@ -154,36 +153,14 @@ func fromYAMLArray(str string) []interface{} {
 //
 // This is designed to be called from a template.
 func toTOML(v interface{}) string {
-	convertedV := convertFloatToIntRecursive(v)
 	b := bytes.NewBuffer(nil)
 	e := toml.NewEncoder(b)
-	err := e.Encode(convertedV)
+	err := e.Encode(v)
 	if err != nil {
+		// Return the error message as a string, consistent with other similar functions.
 		return err.Error()
 	}
 	return b.String()
-}
-
-func convertFloatToIntRecursive(data interface{}) interface{} {
-	switch v := data.(type) {
-	case map[string]interface{}:
-		for key, val := range v {
-			v[key] = convertFloatToIntRecursive(val)
-		}
-		return v
-	case []interface{}:
-		for i, val := range v {
-			v[i] = convertFloatToIntRecursive(val)
-		}
-		return v
-	case float64:
-		if math.Trunc(v) == v {
-			return int64(v)
-		}
-		return v
-	default:
-		return v
-	}
 }
 
 // fromTOML converts a TOML document into a map[string]interface{}.

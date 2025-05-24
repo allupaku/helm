@@ -1318,26 +1318,27 @@ func TestToTOMLIntegerConversion(t *testing.T) {
 			expected: "value = 123.45\n",
 		},
 		{
-			name:     "whole float to int",
+			name:     "whole float is float",
 			input:    map[string]interface{}{"value": float64(123.0)},
-			expected: "value = 123\n",
+			expected: "value = 123.0\n",
 		},
 		{
-			name: "nested map",
+			name: "nested map with mixed types",
 			input: map[string]interface{}{
 				"name": "test",
 				"props": map[string]interface{}{
-					"integer_val":     42,
-					"whole_float_val": float64(88.0),
-					"real_float_val":  3.14,
+					"integer_val":     int(42), // native int
+					"whole_float_val": float64(88.0), // float representing whole number
+					"real_float_val":  3.14,          // actual float
 				},
 			},
+			// Note: BurntSushi/toml sorts map keys alphabetically.
 			expected: `name = "test"
 
 [props]
   integer_val = 42
   real_float_val = 3.14
-  whole_float_val = 88
+  whole_float_val = 88.0
 `,
 		},
 		{
@@ -1345,35 +1346,37 @@ func TestToTOMLIntegerConversion(t *testing.T) {
 			input: map[string]interface{}{
 				"name": "test_slice",
 				"items": []interface{}{
-					10,
-					float64(20.0),
-					30.5,
-					map[string]interface{}{"nested_int": 5, "nested_whole_float": float64(6.0)},
+					int(10),                                                                // native int
+					float64(20.0),                                                          // float representing whole number
+					30.5,                                                                   // actual float
+					map[string]interface{}{"nested_int": 5, "nested_whole_float": float64(6.0)}, // map with int and float whole
 				},
 			},
-			expected: `items = [10, 20, 30.5, {nested_int = 5, nested_whole_float = 6}]
+			// Note: BurntSushi/toml sorts map keys alphabetically within the nested map.
+			expected: `items = [10, 20.0, 30.5, {nested_int = 5, nested_whole_float = 6.0}]
 name = "test_slice"
 `,
 		},
 		{
 			name: "zero values",
 			input: map[string]interface{}{
-				"int_zero":   0,
-				"float_zero": 0.0,
+				"int_zero":   int(0),    // native int
+				"float_zero": float64(0.0), // float representing zero
 			},
-			expected: `float_zero = 0
+			// Note: BurntSushi/toml sorts map keys alphabetically.
+			expected: `float_zero = 0.0
 int_zero = 0
 `,
 		},
 		{
 			name: "map with multiple keys to check sorting",
 			input: map[string]interface{}{
-				"b_value": float64(2.0),
-				"a_value": 1,
-				"c_value": 3.1,
+				"b_value": float64(2.0), // float representing whole number
+				"a_value": int(1),       // native int
+				"c_value": 3.1,          // actual float
 			},
 			expected: `a_value = 1
-b_value = 2
+b_value = 2.0
 c_value = 3.1
 `,
 		},

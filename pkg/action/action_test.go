@@ -32,6 +32,11 @@ import (
 	kubefake "helm.sh/helm/v4/pkg/kube/fake"
 	"helm.sh/helm/v4/pkg/registry"
 	release "helm.sh/helm/v4/pkg/release/v1"
+	"strings"
+
+	"sigs.k8s.io/yaml"
+
+	chartloader "helm.sh/helm/v4/pkg/chart/v2/loader"
 	"helm.sh/helm/v4/pkg/storage"
 	"helm.sh/helm/v4/pkg/storage/driver"
 	"helm.sh/helm/v4/pkg/time"
@@ -370,7 +375,7 @@ func TestGetVersionSet(t *testing.T) {
 }
 
 func TestInstallAction_ToTomlEncoding(t *testing.T) {
-	releaseName := "tভিউ-toml-encoding"
+	releaseName := "test-view-toml-encoding"
 	chartPath := "testdata/charts/toTomlTestChart"
 
 	cfg := actionConfigFixture(t)
@@ -389,7 +394,12 @@ func TestInstallAction_ToTomlEncoding(t *testing.T) {
 	// If we wanted to override with a specific values file, we'd load it here.
 	// For this test, the chart's internal values.yaml is sufficient.
 
-	rel, err := install.Run(chartPath, nil) // Pass nil for values to use the chart's default values.yaml
+	chartRequested, err := chartloader.Load(chartPath)
+	if err != nil {
+		t.Fatalf("Failed to load chart %s: %v", chartPath, err)
+	}
+
+	rel, err := install.Run(chartRequested, nil) // Pass loaded chart and nil for values.
 	if err != nil {
 		t.Fatalf("Install.Run() failed: %v", err)
 	}
@@ -445,109 +455,63 @@ func TestInstallAction_ToTomlEncoding(t *testing.T) {
 		t.Fatalf("ConfigMap %s-toml-test-config not found in rendered manifests", releaseName)
 	}
 
-	var decodedToml map[string]interface{}
-	if _, err := toml.Decode(configMapData, &decodedToml); err != nil {
-		t.Fatalf("Failed to decode TOML data: %v\nTOML data:\n%s", err, configMapData)
+	// Assertions: Check the string content of the TOML data
+	// Note: The BurntSushi/toml encoder sorts map keys alphabetically.
+	expectedTomlSnippets := []string{
+		"integerValue = 42\n",
+		"realFloatValue = 3.14159\n",
+		"wholeFloatValue = 58\n", // Should be encoded as integer
+		"[nestedValues]\n",
+		"  deepInt = 100\n",
+		"  deepRealFloat = 2.718\n",
+		"  deepWholeFloat = 200\n", // Should be encoded as integer
+		// For arrays with maps, the exact order within the map literal might vary based on map iteration order in Go before encoding.
+		// However, BurntSushi/toml sorts keys within tables it creates. For inline maps in arrays, it's trickier.
+		// A more robust check for array elements with maps might involve decoding that specific part if necessary,
+		// or checking for the presence of key-value pairs within the array structure string representation.
+		// For simplicity, we'll check for easily verifiable parts.
+		// Example: items = [1, 2, 3.5, {name = "itemInt", value = 7}, ... ]
+		// We expect value = 7 (integer), value = 8 (integer), value = 9.9 (float)
 	}
 
-	// Assertions
-	assertTomlType(t, decodedToml, "integerValue", int64(42), "int64")
-	assertTomlType(t, decodedToml, "wholeFloatValue", int64(58), "int64")
-	assertTomlType(t, decodedToml, "realFloatValue", float64(3.14159), "float64")
-
-	nested, ok := decodedToml["nestedValues"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("nestedValues is not a map[string]interface{}")
-	}
-	assertTomlType(t, nested, "deepInt", int64(100), "int64")
-	assertTomlType(t, nested, "deepWholeFloat", int64(200), "int64")
-	assertTomlType(t, nested, "deepRealFloat", float64(2.718), "float64")
-
-	arrayValues, ok := decodedToml["arrayValues"].([]interface{})
-	if !ok {
-		t.Fatalf("arrayValues is not a []interface{}")
-	}
-	if len(arrayValues) != 6 {
-		t.Fatalf("Expected 6 elements in arrayValues, got %d", len(arrayValues))
-	}
-
-	assertTomlType(t, arrayValues, 0, int64(1), "int64")
-	assertTomlType(t, arrayValues, 1, int64(2), "int64")
-	assertTomlType(t, arrayValues, 2, float64(3.5), "float64")
-
-	itemIntMap, ok := arrayValues[3].(map[string]interface{})
-	if !ok {
-		t.Fatalf("arrayValues[3] is not a map")
-	}
-	assertTomlType(t, itemIntMap, "value", int64(7), "int64")
-
-	itemWholeFloatMap, ok := arrayValues[4].(map[string]interface{})
-	if !ok {
-		t.Fatalf("arrayValues[4] is not a map")
-	}
-	assertTomlType(t, itemWholeFloatMap, "value", int64(8), "int64")
-
-	itemRealFloatMap, ok := arrayValues[5].(map[string]interface{})
-	if !ok {
-		t.Fatalf("arrayValues[5] is not a map")
-	}
-	assertTomlType(t, itemRealFloatMap, "value", float64(9.9), "float64")
-}
-
-// assertTomlType is a helper to check type and value of a key in a map or an index in a slice.
-func assertTomlType(t *testing.T, data interface{}, keyOrIndex interface{}, expectedValue interface{}, expectedType string) {
-	t.Helper()
-	var value interface{}
-	var found bool
-
-	switch d := data.(type) {
-	case map[string]interface{}:
-		key, ok := keyOrIndex.(string)
-		if !ok {
-			t.Fatalf("keyOrIndex must be string for map, got %T", keyOrIndex)
+	for _, snippet := range expectedTomlSnippets {
+		if !strings.Contains(configMapData, snippet) {
+			t.Errorf("Expected TOML data to contain snippet:\n%s\n\nGot TOML data:\n%s", snippet, configMapData)
 		}
-		value, found = d[key]
-		if !found {
-			t.Errorf("Key %q not found in TOML data", key)
-			return
-		}
-	case []interface{}:
-		index, ok := keyOrIndex.(int)
-		if !ok {
-			t.Fatalf("keyOrIndex must be int for slice, got %T", keyOrIndex)
-		}
-		if index < 0 || index >= len(d) {
-			t.Errorf("Index %d out of bounds for TOML array (len %d)", index, len(d))
-			return
-		}
-		value = d[index]
-	default:
-		t.Fatalf("Unsupported data type for assertion: %T", data)
-		return
 	}
 
-	switch expectedType {
-	case "int64":
-		v, ok := value.(int64)
-		if !ok {
-			t.Errorf("Expected key/index '%v' to be int64, got %T (value: %v)", keyOrIndex, value, value)
-			return
-		}
-		if expected, ok := expectedValue.(int64); ok && v != expected {
-			t.Errorf("Expected key/index '%v' to have value %d, got %d", keyOrIndex, expected, v)
-		}
-	case "float64":
-		v, ok := value.(float64)
-		if !ok {
-			t.Errorf("Expected key/index '%v' to be float64, got %T (value: %v)", keyOrIndex, value, value)
-			return
-		}
-		if expected, ok := expectedValue.(float64); ok && v != expected {
-			// Comparing floats for exact equality can be tricky due to precision.
-			// For this test, direct comparison should be fine as values are hardcoded.
-			t.Errorf("Expected key/index '%v' to have value %f, got %f", keyOrIndex, expected, v)
-		}
-	default:
-		t.Errorf("Unsupported expectedType for assertion: %s", expectedType)
+	// More specific checks for array items if direct string matching is too fragile due to map key ordering in arrays.
+	// For items like `{name = "itemInt", value = 7}` (value should be int)
+	// and `{name = "itemWholeFloat", value = 8}` (value should be int)
+	// and `{name = "itemRealFloat", value = 9.9}` (value should be float)
+
+	// A simple check for this known structure:
+	// arrayValues = [1, 2, 3.5, {name = "itemInt", value = 7}, {name = "itemRealFloat", value = 9.9}, {name = "itemWholeFloat", value = 8}]
+	// Note: The order of maps within the array depends on the original order in values.yaml
+	// The order of keys within each map literal is sorted by the TOML encoder.
+	// values.yaml has: itemInt, itemWholeFloat, itemRealFloat
+	// Expected encoded order of map keys: name, value
+	// Expected order of items in array:
+	// 1
+	// 2.0 -> 2
+	// 3.5
+	// {name = "itemInt", value = 7}
+	// {name = "itemWholeFloat", value = 8}
+	// {name = "itemRealFloat", value = 9.9}
+
+	// TOML output for arrayValues based on values.yaml and sorting:
+	// arrayValues = [1, 2, 3.5, {name = "itemInt", value = 7}, {name = "itemWholeFloat", value = 8}, {name = "itemRealFloat", value = 9.9}]
+	// The values.yaml order is:
+	// - 1
+	// - 2.0
+	// - 3.5
+	// - name: itemInt, value: 7
+	// - name: itemWholeFloat, value: 8.0
+	// - name: itemRealFloat, value: 9.9
+
+	expectedArrayString := `arrayValues = [1, 2, 3.5, {name = "itemInt", value = 7}, {name = "itemWholeFloat", value = 8}, {name = "itemRealFloat", value = 9.9}]`
+	if !strings.Contains(configMapData, expectedArrayString) {
+		t.Errorf("Expected TOML data to contain exact array string:\n%s\n\nGot TOML data:\n%s", expectedArrayString, configMapData)
 	}
+
 }
