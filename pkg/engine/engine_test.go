@@ -1301,6 +1301,131 @@ func TestRenderTplMissingKeyString(t *testing.T) {
 	}
 }
 
+func TestToTOMLIntegerConversion(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    interface{}
+		expected string
+	}{
+		{
+			name:     "simple integer",
+			input:    map[string]interface{}{"value": 123},
+			expected: "value = 123\n",
+		},
+		{
+			name:     "simple float",
+			input:    map[string]interface{}{"value": 123.45},
+			expected: "value = 123.45\n",
+		},
+		{
+			name:     "whole float to int",
+			input:    map[string]interface{}{"value": float64(123.0)},
+			expected: "value = 123\n",
+		},
+		{
+			name: "nested map",
+			input: map[string]interface{}{
+				"name": "test",
+				"props": map[string]interface{}{
+					"integer_val":     42,
+					"whole_float_val": float64(88.0),
+					"real_float_val":  3.14,
+				},
+			},
+			expected: `name = "test"
+
+[props]
+  integer_val = 42
+  real_float_val = 3.14
+  whole_float_val = 88
+`,
+		},
+		{
+			name: "slice with mixed types",
+			input: map[string]interface{}{
+				"name": "test_slice",
+				"items": []interface{}{
+					10,
+					float64(20.0),
+					30.5,
+					map[string]interface{}{"nested_int": 5, "nested_whole_float": float64(6.0)},
+				},
+			},
+			expected: `name = "test_slice"
+items = [10, 20, 30.5, {nested_int = 5, nested_whole_float = 6}]
+`,
+		},
+		{
+			name: "zero values",
+			input: map[string]interface{}{
+				"int_zero":   0,
+				"float_zero": 0.0,
+			},
+			expected: `float_zero = 0
+int_zero = 0
+`,
+		},
+		{
+			name: "map with multiple keys to check sorting",
+			input: map[string]interface{}{
+				"b_value": float64(2.0),
+				"a_value": 1,
+				"c_value": 3.1,
+			},
+			expected: `a_value = 1
+b_value = 2
+c_value = 3.1
+`,
+		},
+	}
+
+	fns := funcMap()
+	toTomlFn := fns["toToml"].(func(interface{}) string)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			output := toTomlFn(tc.input)
+			// Using strings.TrimSpace for comparison might be too lenient for TOML structure.
+			// Direct comparison is better if expected strings are exact.
+			// Adding a diff output for easier debugging.
+			if output != tc.expected {
+				t.Errorf("Expected TOML:\n%s\nGot TOML:\n%s\n\nDiff:\n--- Expected\n+++ Got\n%s", tc.expected, output, getDiff(tc.expected, output))
+			}
+		})
+	}
+}
+
+// getDiff is a helper function to show differences between two strings.
+// This is a simple line-by-line diff, not a full diff algorithm.
+func getDiff(expected, actual string) string {
+	expectedLines := strings.Split(expected, "\n")
+	actualLines := strings.Split(actual, "\n")
+	var diff strings.Builder
+
+	maxLines := len(expectedLines)
+	if len(actualLines) > maxLines {
+		maxLines = len(actualLines)
+	}
+
+	for i := 0; i < maxLines; i++ {
+		eLine := ""
+		if i < len(expectedLines) {
+			eLine = expectedLines[i]
+		}
+		aLine := ""
+		if i < len(actualLines) {
+			aLine = actualLines[i]
+		}
+
+		if eLine != aLine {
+			diff.WriteString(fmt.Sprintf("-%s\n+%s\n", eLine, aLine))
+		} else {
+			diff.WriteString(fmt.Sprintf(" %s\n", eLine))
+		}
+	}
+	return diff.String()
+}
+
 func TestRenderCustomTemplateFuncs(t *testing.T) {
 	// Create a chart with two templates that use custom functions
 	c := &chart.Chart{
