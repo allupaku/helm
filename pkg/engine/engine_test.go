@@ -1351,8 +1351,8 @@ func TestToTOMLIntegerConversion(t *testing.T) {
 					map[string]interface{}{"nested_int": 5, "nested_whole_float": float64(6.0)},
 				},
 			},
-			expected: `name = "test_slice"
-items = [10, 20, 30.5, {nested_int = 5, nested_whole_float = 6}]
+			expected: `items = [10, 20, 30.5, {nested_int = 5, nested_whole_float = 6}]
+name = "test_slice"
 `,
 		},
 		{

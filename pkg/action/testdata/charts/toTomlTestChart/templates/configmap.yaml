@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-toml-test-config
+data:
+  myConfig.toml: |
+{{ .Values | toToml | indent 4 }}
+  specificConversion.toml: |
+    integerCheck = {{ .Values.integerValue | toToml }}
+    wholeFloatCheck = {{ .Values.wholeFloatValue | toToml }}
+    realFloatCheck = {{ .Values.realFloatValue | toToml }}
+    nestedToToml: |
+{{ .Values.nestedValues | toToml | indent 6 }}
+    arrayToToml: |
+{{ .Values.arrayValues | toToml | indent 6 }}

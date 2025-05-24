@@ -1,0 +1,20 @@
+# Test values for toTOML encoding
+integerValue: 42
+wholeFloatValue: 58.0
+realFloatValue: 3.14159
+
+nestedValues:
+  deepInt: 100
+  deepWholeFloat: 200.0
+  deepRealFloat: 2.718
+
+arrayValues:
+  - 1
+  - 2.0
+  - 3.5
+  - name: itemInt
+    value: 7
+  - name: itemWholeFloat
+    value: 8.0
+  - name: itemRealFloat
+    value: 9.9

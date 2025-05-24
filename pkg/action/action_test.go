@@ -368,3 +368,186 @@ func TestGetVersionSet(t *testing.T) {
 		t.Error("Non-existent version is reported found.")
 	}
 }
+
+func TestInstallAction_ToTomlEncoding(t *testing.T) {
+	releaseName := "tভিউ-toml-encoding"
+	chartPath := "testdata/charts/toTomlTestChart"
+
+	cfg := actionConfigFixture(t)
+	// For ClientOnly, KubeClient should be a specific type that allows rendering without a cluster.
+	// Using a simple fake client here as the actual interaction is DryRun.
+	// If a more specific fake is needed (e.g. for discovery), this might need adjustment.
+	cfg.KubeClient = &kubefake.PrintingKubeClient{Out: io.Discard}
+
+	install := NewInstall(cfg)
+	install.ReleaseName = releaseName
+	install.DryRun = true
+	install.ClientOnly = true // Important for rendering without cluster interaction
+
+	// Load chart values.
+	// Note: install.Run will load values from the chart's values.yaml by default.
+	// If we wanted to override with a specific values file, we'd load it here.
+	// For this test, the chart's internal values.yaml is sufficient.
+
+	rel, err := install.Run(chartPath, nil) // Pass nil for values to use the chart's default values.yaml
+	if err != nil {
+		t.Fatalf("Install.Run() failed: %v", err)
+	}
+
+	if rel == nil {
+		t.Fatal("Install.Run() returned a nil release")
+	}
+	if rel.Manifest == "" {
+		t.Fatal("Install.Run() returned a release with an empty manifest")
+	}
+
+	// Find the ConfigMap and extract TOML data
+	var configMapData string
+	// Manifests are separated by "---". Split them and parse.
+	manifests := strings.Split(rel.Manifest, "---")
+	foundCM := false
+	for _, manifest := range manifests {
+		if strings.TrimSpace(manifest) == "" {
+			continue
+		}
+		var obj map[string]interface{}
+		if err := yaml.Unmarshal([]byte(manifest), &obj); err != nil {
+			t.Fatalf("Failed to unmarshal manifest part: %v\nManifest part:\n%s", err, manifest)
+		}
+
+		kind, _ := obj["kind"].(string)
+		if kind != "ConfigMap" {
+			continue
+		}
+
+		metadata, ok := obj["metadata"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := metadata["name"].(string)
+
+		if name == releaseName+"-toml-test-config" {
+			data, ok := obj["data"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("ConfigMap %s has no data field or it's not a map", name)
+			}
+			tomlString, ok := data["myConfig.toml"].(string)
+			if !ok {
+				t.Fatalf("ConfigMap %s data has no myConfig.toml field or it's not a string", name)
+			}
+			configMapData = tomlString
+			foundCM = true
+			break
+		}
+	}
+
+	if !foundCM {
+		t.Fatalf("ConfigMap %s-toml-test-config not found in rendered manifests", releaseName)
+	}
+
+	var decodedToml map[string]interface{}
+	if _, err := toml.Decode(configMapData, &decodedToml); err != nil {
+		t.Fatalf("Failed to decode TOML data: %v\nTOML data:\n%s", err, configMapData)
+	}
+
+	// Assertions
+	assertTomlType(t, decodedToml, "integerValue", int64(42), "int64")
+	assertTomlType(t, decodedToml, "wholeFloatValue", int64(58), "int64")
+	assertTomlType(t, decodedToml, "realFloatValue", float64(3.14159), "float64")
+
+	nested, ok := decodedToml["nestedValues"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("nestedValues is not a map[string]interface{}")
+	}
+	assertTomlType(t, nested, "deepInt", int64(100), "int64")
+	assertTomlType(t, nested, "deepWholeFloat", int64(200), "int64")
+	assertTomlType(t, nested, "deepRealFloat", float64(2.718), "float64")
+
+	arrayValues, ok := decodedToml["arrayValues"].([]interface{})
+	if !ok {
+		t.Fatalf("arrayValues is not a []interface{}")
+	}
+	if len(arrayValues) != 6 {
+		t.Fatalf("Expected 6 elements in arrayValues, got %d", len(arrayValues))
+	}
+
+	assertTomlType(t, arrayValues, 0, int64(1), "int64")
+	assertTomlType(t, arrayValues, 1, int64(2), "int64")
+	assertTomlType(t, arrayValues, 2, float64(3.5), "float64")
+
+	itemIntMap, ok := arrayValues[3].(map[string]interface{})
+	if !ok {
+		t.Fatalf("arrayValues[3] is not a map")
+	}
+	assertTomlType(t, itemIntMap, "value", int64(7), "int64")
+
+	itemWholeFloatMap, ok := arrayValues[4].(map[string]interface{})
+	if !ok {
+		t.Fatalf("arrayValues[4] is not a map")
+	}
+	assertTomlType(t, itemWholeFloatMap, "value", int64(8), "int64")
+
+	itemRealFloatMap, ok := arrayValues[5].(map[string]interface{})
+	if !ok {
+		t.Fatalf("arrayValues[5] is not a map")
+	}
+	assertTomlType(t, itemRealFloatMap, "value", float64(9.9), "float64")
+}
+
+// assertTomlType is a helper to check type and value of a key in a map or an index in a slice.
+func assertTomlType(t *testing.T, data interface{}, keyOrIndex interface{}, expectedValue interface{}, expectedType string) {
+	t.Helper()
+	var value interface{}
+	var found bool
+
+	switch d := data.(type) {
+	case map[string]interface{}:
+		key, ok := keyOrIndex.(string)
+		if !ok {
+			t.Fatalf("keyOrIndex must be string for map, got %T", keyOrIndex)
+		}
+		value, found = d[key]
+		if !found {
+			t.Errorf("Key %q not found in TOML data", key)
+			return
+		}
+	case []interface{}:
+		index, ok := keyOrIndex.(int)
+		if !ok {
+			t.Fatalf("keyOrIndex must be int for slice, got %T", keyOrIndex)
+		}
+		if index < 0 || index >= len(d) {
+			t.Errorf("Index %d out of bounds for TOML array (len %d)", index, len(d))
+			return
+		}
+		value = d[index]
+	default:
+		t.Fatalf("Unsupported data type for assertion: %T", data)
+		return
+	}
+
+	switch expectedType {
+	case "int64":
+		v, ok := value.(int64)
+		if !ok {
+			t.Errorf("Expected key/index '%v' to be int64, got %T (value: %v)", keyOrIndex, value, value)
+			return
+		}
+		if expected, ok := expectedValue.(int64); ok && v != expected {
+			t.Errorf("Expected key/index '%v' to have value %d, got %d", keyOrIndex, expected, v)
+		}
+	case "float64":
+		v, ok := value.(float64)
+		if !ok {
+			t.Errorf("Expected key/index '%v' to be float64, got %T (value: %v)", keyOrIndex, value, value)
+			return
+		}
+		if expected, ok := expectedValue.(float64); ok && v != expected {
+			// Comparing floats for exact equality can be tricky due to precision.
+			// For this test, direct comparison should be fine as values are hardcoded.
+			t.Errorf("Expected key/index '%v' to have value %f, got %f", keyOrIndex, expected, v)
+		}
+	default:
+		t.Errorf("Unsupported expectedType for assertion: %s", expectedType)
+	}
+}
